@@ -1,39 +1,49 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
-from QL import *
+import numpy as np
+from Test_C import *
+from minigrid.wrappers import RGBImgObsWrapper
+
 
 def main():
-    SIZE = 10
-    ACTIONS = 3
-    EPISODES = 5000
+    SIZE = 7              # tamaño del entorno
+    ACTIONS = 3           # Left, Right, Forward
+    EPISODES = 1500       # más episodios para aprendizaje estable
     STEPS = 400
-    DISCOUNT_FACTOR = 0.98
-    LR = 0.03
+    LR = 0.05
 
+    # Crear entorno
     env = SimpleEnv(size=SIZE, render_mode=None)
     env = RGBImgObsWrapper(env)
 
-    qTable = init_Q_Table(SIZE, ACTIONS)
+    # Inicializar parámetros (policy)
+    params = init_params(SIZE, ACTIONS)
 
-    # Train agent
-    qTable = train(env, qTable, EPISODES, STEPS, ACTIONS, LR, DISCOUNT_FACTOR)
+    # Entrenar agente
+    params = train(env, params, EPISODES, STEPS, ACTIONS, LR)
 
-    # Graph Q-table with Q average per state
-    q_values = np.zeros((SIZE, SIZE))
+    # ---- Graficar el "valor medio" de la política por celda ----
+    table = np.zeros((SIZE, SIZE))
+    """
     for i in range(SIZE):
         for j in range(SIZE):
-            vals = []
-            for d in range(4):
-                vals.append(np.max(qTable[(i, j, d)]))
-            q_values[i, j] = np.mean(vals)
+            values = []
+            for d in range(4):  # las 4 orientaciones del agente
+                probs = softmax(params[(i, j, d)])
+                values.append(np.max(probs))  # confianza en la acción más probable
+            table[i, j] = np.mean(values)
 
     plt.figure(figsize=(6, 5))
-    sns.heatmap(q_values, annot=True, fmt=".2f", cmap="coolwarm")
-    plt.title("Promedio de Q-values por celda (promediando dirección)")
+    sns.heatmap(table, annot=True, fmt=".2f", cmap="coolwarm")
+    plt.title("Promedio de probabilidad máxima por celda (política entrenada)")
+    plt.xlabel("Eje X del entorno")
+    plt.ylabel("Eje Y del entorno")
     plt.show()
+    """
 
-    # Test agent
-    test(env, qTable, STEPS, SIZE, 10)
+    # ---- Prueba visual del agente ----
+    test(env, params, STEPS, SIZE, EPISODES=5)
 
 
-main()
+if __name__ == "__main__":
+    main()
