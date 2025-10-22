@@ -1,146 +1,101 @@
-# PolicyGradient.py
 from minigrid.wrappers import RGBImgObsWrapper
 from minigrid_simple_env import SimpleEnv
 from scipy.special import softmax
 import numpy as np
 
-# -------------------------
-# Helpers
-# -------------------------
-def init_params(size, n_actions):
-    """Inicializa un diccionario de parámetros por (x, y, dir)."""
-    params = {}
-    for i in range(size):
-        for j in range(size):
-            for d in range(4):
-                params[(i, j, d)] = np.zeros(shape=n_actions, dtype=float)
+
+# --- Función de actualización tipo Policy Gradient (REINFORCE paso a paso)
+def update_params_with_softmax(params, selected_index, reward, lr=0.1):
+    """
+    Aplica el gradiente del log de la política con el reward actual (tipo REINFORCE).
+    params: vector de parámetros del estado actual
+    selected_index: acción seleccionada
+    reward: recompensa obtenida después de ejecutar la acción
+    """
+    probs = softmax(params)
+    grad = np.zeros_like(params)
+    grad[selected_index] = 1.0  # vector one-hot de la acción tomada
+    # Actualización tipo policy gradient: ∇θ log π(a|s) * R
+    params += lr * (grad - probs) * reward
     return params
 
 
-def softmax_probs(logits):
-    """Devuelve una distribución de probabilidad segura numéricamente."""
-    p = softmax(logits)
-    p = p / np.sum(p)  # normaliza por seguridad
-    return p
+# --- Inicialización
+def init_params(size, n_actions):
+    params = {}
+    for i in range(size):
+        for j in range(size):
+            for d in range(4):  # 4 direcciones posibles
+                params[(i, j, d)] = np.zeros(shape=n_actions)
+    return params
 
 
-def compute_returns(rewards, gamma=0.99):
-    """Calcula los retornos acumulados (Return-to-go)."""
-    T = len(rewards)
-    returns = np.zeros(T, dtype=float)
-    G = 0.0
-    for t in reversed(range(T)):
-        G = rewards[t] + gamma * G
-        returns[t] = G
-    return returns
-
-
-# -------------------------
-# Train (REINFORCE)
-# -------------------------
-def train(env, params, EPISODES, STEPS, ACTIONS, LR, gamma=0.99, normalize_returns=True):
-    """
-    Entrena con el algoritmo REINFORCE (Monte Carlo Policy Gradient).
-    """
-    action_map = {
-        0: env.actions.left,
-        1: env.actions.right,
-        2: env.actions.forward
-    }
+# --- Entrenamiento
+def train(env, params, EPISODES, STEPS, ACTIONS, LR):
+    # Exploración epsilon-greedy sobre softmax
+    max_epsilon = 1.0
+    min_epsilon = 0.05
+    decay_rate = 0.001
 
     success_count = 0
     rewards_per_episode = []
 
-    for ep in range(1, EPISODES + 1):
+    for episode in range(1, EPISODES + 1):
+        total_reward = 0
+        epsilon = min_epsilon + (max_epsilon - min_epsilon) * np.exp(-decay_rate * episode)
+
         obs, _ = env.reset()
-        states, actions, rewards = [], [], []
         terminated = False
 
-        # -------------------------
-        # Interacción episodio
-        # -------------------------
         for step in range(STEPS):
+            # Estado actual
             pos = tuple(env.unwrapped.agent_pos)
-            d = env.unwrapped.agent_dir
-            state = (pos[0], pos[1], d)
+            dir = env.unwrapped.agent_dir
+            current_state = (pos[0], pos[1], dir)
 
-            logits = params[state]
-            probs = softmax_probs(logits)
+            # Selección de acción
+            if np.random.uniform(0, 1) < epsilon:
+                action = np.random.randint(ACTIONS)
+            else:
+                action = np.random.choice(range(ACTIONS), size=1, p=softmax(params[current_state]))[0]
 
-            # Política estocástica (sampling)
-            action_idx = np.random.choice(ACTIONS, p=probs)
-            real_action = action_map[action_idx]
+            # Ejecutar acción
+            obs, reward, terminated, truncated, info = env.step(action)
+            reward -= 0.001  # penalización por paso
+            total_reward += reward
 
-            obs, reward, terminated, truncated, info = env.step(real_action)
-            reward -= 0.001  # penalización leve por paso
+            # Actualizar parámetros de la política en el mismo paso
+            # (usamos reward inmediato o una forma de retorno estimado simple)
+            params[current_state] = update_params_with_softmax(
+                params[current_state], selected_index=action, reward=reward, lr=LR
+            )
 
-            states.append(state)
-            actions.append(action_idx)
-            rewards.append(reward)
-
+            # Terminar episodio si llega al objetivo o se trunca
             if terminated or truncated:
+                if terminated:
+                    success_count += 1
                 break
 
-        # -------------------------
-        # Cálculo de retornos
-        # -------------------------
-        returns = compute_returns(rewards, gamma=gamma)
+        rewards_per_episode.append(total_reward)
 
-        if normalize_returns and len(returns) > 1:
-            returns = (returns - np.mean(returns)) / (np.std(returns) + 1e-8)
+        if episode%10 == 0:
+            print(f"Episode {episode}/{EPISODES} — ε={epsilon:.3f} — Reward={total_reward:.2f}")
 
-        # -------------------------
-        # Actualización de parámetros
-        # -------------------------
-        for s, a, Gt in zip(states, actions, returns):
-            logits = params[s]
-            probs = softmax_probs(logits)
-
-            grad_log = np.zeros_like(logits)
-            grad_log[a] = 1.0
-            grad_log -= probs  # gradiente de log π(a|s)
-
-            # Actualización ascendente (maximize expected return)
-            new_logits = logits + LR * Gt * grad_log
-
-            # ✅ Asegurar que sigue siendo numpy array y no se corrompe
-            params[s] = np.array(new_logits, dtype=float)
-
-        episode_reward = np.sum(rewards)
-        rewards_per_episode.append(episode_reward)
-
-        if terminated:
-            success_count += 1
-
-        # Logging
-        if ep % 50 == 0 or ep == 1:
-            avg_last = np.mean(rewards_per_episode[-50:]) if len(rewards_per_episode) >= 1 else 0.0
-            print(f"Ep {ep}/{EPISODES} | R_ep={episode_reward:.2f} | avg50={avg_last:.3f} | successes={success_count}")
-
-    print(f"\n✅ Training finished. Successes: {success_count}/{EPISODES}")
-    return params, rewards_per_episode
+    print(f"\nSuccess rate: {success_count}/{EPISODES}")
+    return params
 
 
-# -------------------------
-# Test (no learning)
-# -------------------------
-def test(env, params, STEPS, SIZE, EPISODES, render=True):
-    print("\nEvaluating trained agent (deterministic argmax policy)\n")
+# --- Prueba
+def test(env, params, STEPS, SIZE, EPISODES):
+    print("\nEvaluando agente entrenado...\n")
 
-    # Recrear entorno para renderizado
-    env = SimpleEnv(size=SIZE, render_mode="human" if render else None)
+    env = SimpleEnv(size=SIZE, render_mode="human")
     env = RGBImgObsWrapper(env)
 
-    action_map = {
-        0: env.actions.left,
-        1: env.actions.right,
-        2: env.actions.forward
-    }
     actions_names = ["Left", "Right", "Forward"]
-
     success_count = 0
 
-    for ep in range(1, EPISODES + 1):
+    for episode in range(1, EPISODES + 1):
         obs, _ = env.reset()
         terminated = False
         total_reward = 0
@@ -148,17 +103,15 @@ def test(env, params, STEPS, SIZE, EPISODES, render=True):
 
         while not terminated and steps < STEPS:
             pos = tuple(env.unwrapped.agent_pos)
-            d = env.unwrapped.agent_dir
-            s = (pos[0], pos[1], d)
+            dir = env.unwrapped.agent_dir
+            current_state = (pos[0], pos[1], dir)
 
-            # Acción determinista (greedy)
-            logits = params[s]
-            action_idx = int(np.argmax(logits))
-            real_action = action_map[action_idx]
+            # Acción determinista en test
+            action = np.random.choice(range(len(params[current_state])), size=1, p=softmax(params[current_state]))[0]
 
-            print(f"Step {steps}: pos={s}, action={actions_names[action_idx]}")
+            print(f"Step {steps}: pos={current_state}, action={actions_names[action]}")
 
-            obs, reward, terminated, truncated, info = env.step(real_action)
+            obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             steps += 1
 
@@ -167,6 +120,26 @@ def test(env, params, STEPS, SIZE, EPISODES, render=True):
 
         if terminated:
             success_count += 1
-        print(f"Test Ep {ep} — Success={terminated}, Reward={total_reward:.2f}, Steps={steps}")
 
-    print(f"\n✅ Test success rate: {success_count}/{EPISODES}")
+        print(f"Test Episode {episode} — Success={terminated}, Total Reward={total_reward:.2f}, Steps={steps}")
+
+    print(f"\nSuccess rate during test: {success_count}/{EPISODES}")
+
+
+# --- Main
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    SIZE = 7
+    ACTIONS = 3
+    EPISODES = 2000
+    STEPS = 400
+    LR = 0.02
+
+    env = SimpleEnv(size=SIZE, render_mode=None)
+    env = RGBImgObsWrapper(env)
+
+    params = init_params(SIZE, ACTIONS)
+    params = train(env, params, EPISODES, STEPS, ACTIONS, LR)
+
+    test(env, params, STEPS, SIZE, EPISODES=5)
