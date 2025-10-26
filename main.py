@@ -1,30 +1,44 @@
+# Importación de librerias y modulos
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from Test_C import *
+from PolicyGradient import *   # Asegúrate de que Test_C.py contenga el código REINFORCE
 from minigrid.wrappers import RGBImgObsWrapper
 
-
 def main():
-    SIZE = 7              # tamaño del entorno
-    ACTIONS = 3           # Left, Right, Forward
-    EPISODES = 1500       # más episodios para aprendizaje estable
-    STEPS = 400
-    LR = 0.05
+    # Tamaño del entorno
+    SIZE = 10         
+    # Número de acciones posibles     
+    ACTIONS = 3           
+    # Número de episodios para el entrenamiento
+    EPISODES = 1500    
+    # Número de pasos por episodio
+    STEPS = 400          
+    # Learning rate
+    LR = 0.05         
+    # Factor para el descuento 
+    DISCOUNT_FACTOR = 0.98
 
-    # Crear entorno
+    # Instancia del entorno
     env = SimpleEnv(size=SIZE, render_mode=None)
     env = RGBImgObsWrapper(env)
 
-    # Inicializar parámetros (policy)
-    params = init_params(SIZE, ACTIONS)
+    # Inicializar parametros
+    policy = init_params(SIZE, ACTIONS)
 
-    # Entrenar agente
-    params = train(env, params, EPISODES, STEPS, ACTIONS, LR)
+    # Entrenar agente con REINFORCE
+    policy, rewards_per_episode = train(env, policy, EPISODES, STEPS, LR, DISCOUNT_FACTOR)
 
-    # ---- Prueba visual del agente ----
-    test(env, params, STEPS, SIZE, EPISODES=5)
+    # Mostrar evolución de las recompensas por episodio
+    plt.figure(figsize=(10, 5))
+    sns.lineplot(x=np.arange(EPISODES), y=rewards_per_episode)
+    plt.title("Recompensa total por episodio")
+    plt.xlabel("Episodios")
+    plt.ylabel("Recompensa total")
+    plt.grid(True)
+    plt.show()
 
+    # Probar el aprendizaje del agente por 10 episodios
+    test(env, policy, STEPS, SIZE, EPISODES=10)
 
-if __name__ == "__main__":
-    main()
+main()

@@ -1,119 +1,137 @@
+# Importación de librerías
 from minigrid.wrappers import RGBImgObsWrapper
 from minigrid_simple_env import SimpleEnv
-from scipy.special import softmax
 import numpy as np
+from scipy.special import softmax
 
-# -- Policy Gradient functions
-def update_params_with_softmax(params, selected_index, reward, lr=0.1):
-    probs = softmax(params)
-    grad = np.zeros_like(params)
-    grad[selected_index] = 1  # sólo la seleccionada obtiene refuerzo
-    params += lr * (grad - probs) * reward
-    return params
-
-# Initialize parameters
+# Inicializa los parámetros de la política para cada estado que tiene un vector de pesos que define la probabilidad de cada acción
 def init_params(size, n_actions):
     params = {}
     for i in range(size):
         for j in range(size):
-            for d in range(4):  # 4 directions
-                params[(i, j, d)] = np.zeros(shape=n_actions)
+            for d in range(4):  # Direcciones posibles
+                # Inicializar los parámetros
+                params[(i, j, d)] = np.zeros(n_actions)
     return params
 
-# Training function
-def train(env, params, EPISODES, STEPS, ACTIONS, LR):
-    # Exploration parameters
-    max_epsilon = 1.0
-    min_epsilon = 0.05
-    decay_rate = 0.001
+# Selecciona una acción según los parametros actuales
+def select_action(params, state):
+    probs = softmax(params[state])
+    action = np.random.choice(len(probs), p=probs)
+    return action, probs
+
+# Calcula las recompensas (reward-to-go) como :
+# G_t = r_t + γ * r_{t+1} + γ^2 * r_{t+2} + ...
+def compute_rtgo(rewards, gamma):
+    returns = np.zeros_like(rewards, dtype=np.float32)
+    G = 0
+    for t in reversed(range(len(rewards))):
+        G = rewards[t] + gamma * G
+        returns[t] = G
+    return returns
+
+# Entrenamiento del agente mediante REINFORCE (Policy Gradient)
+def train(env, policy, EPISODES, STEPS, LR, DISCOUNT_FACTOR):
+    print("\nEntrenamiento del agente...\n")
 
     success_count = 0
     rewards_per_episode = []
 
+    # Entrenamiento
     for episode in range(1, EPISODES + 1):
-        total_reward = 0
-        epsilon = min_epsilon + (max_epsilon - min_epsilon) * np.exp(-decay_rate * episode)
+        # Listas para almacenar trayectoria del episodio
+        states, actions, rewards = [], [], []
+
         obs, _ = env.reset()
         terminated = False
+        total_reward = 0
 
         for step in range(STEPS):
-            # Get current position and direction 
+            # Obtener el estado actual
             pos = tuple(env.unwrapped.agent_pos)
             dir = env.unwrapped.agent_dir
             current_state = (pos[0], pos[1], dir)
 
-            # Action selection
-            if np.random.uniform(0, 1) < epsilon:
-                # Random selection
-                action = np.random.randint(ACTIONS)
-            else:
-                # Softmax choice
-                action =np.random.choice(range(ACTIONS), size=1, p=softmax(params[current_state]))[0]
+            # Seleccionar acción según política
+            action, probs = select_action(policy, current_state)
 
-            # Execute step with selected action
+            # Ejecutar acción en el entorno
             obs, reward, terminated, truncated, info = env.step(action)
-
-            reward -= 0.001  # Add a small penalty for each step
+            reward -= 0.001  # Penalización leve por paso
             total_reward += reward
 
-            # Get new state
-            new_pos = tuple(env.unwrapped.agent_pos)
-            new_dir = env.unwrapped.agent_dir
-            next_state = (new_pos[0], new_pos[1], new_dir)
-
-            # Apply qlearning eq for update
-            params[current_state] = update_params_with_softmax(params[current_state], action, total_reward, LR)
+            # Guardar trayectoria
+            states.append(current_state)
+            actions.append(action)
+            rewards.append(reward)
 
             if terminated or truncated:
                 if terminated:
                     success_count += 1
                 break
 
+        # Calcular recompensas (reward-to-go)
+        rtgo = compute_rtgo(rewards, DISCOUNT_FACTOR)
+
+        # Actualizar parámetros de la política
+        for state, action, Gt in zip(states, actions, rtgo):
+            probs = softmax(policy[state])
+            grad_log = -probs
+            grad_log[action] += 1.0  
+            policy[state] += LR * Gt * grad_log 
+
         rewards_per_episode.append(total_reward)
-        print(f"Episode {episode}/{EPISODES} — ε={epsilon:.3f} — Reward={total_reward:.2f}")
 
+        # Log
+        if episode % 100 == 0:
+            print(f"Episode {episode}/{EPISODES} — Reward={total_reward:.2f}")
+
+    # Mostrar tasa de éxito final
     print(f"\nSuccess rate: {success_count}/{EPISODES}")
-    return params
 
-# Testing function
-def test(env, params, STEPS, SIZE, EPISODES):
-    print("\nEvaluando agente entrenado...\n")
+    return policy, rewards_per_episode
 
+
+# Evaluación del agente entrenado sin exploración
+def test(env, policy, STEPS, SIZE, EPISODES):
+    print("\nTest del agente entrenado...\n")
+
+    # Crear entorno con renderizado visual
     env = SimpleEnv(size=SIZE, render_mode="human")
     env = RGBImgObsWrapper(env)
 
-    actions_names = ["Left", "Right", "Forward"]
     success_count = 0
 
+    # Ejecutar episodios de prueba
     for episode in range(1, EPISODES + 1):
         obs, _ = env.reset()
         terminated = False
         total_reward = 0
         steps = 0
 
+        # Ejecutar pasos hasta que el episodio termine
         while not terminated and steps < STEPS:
-            # Get current position and direction = State
+            # Obtener el estado actual
             pos = tuple(env.unwrapped.agent_pos)
             dir = env.unwrapped.agent_dir
             current_state = (pos[0], pos[1], dir)
 
-            # Softmax choice
-            action =np.random.choice(range(len(params[current_state])), size=1, p=softmax(params[current_state]))[0]
+            # Elegir la acción más probable según la política
+            probs = softmax(policy[current_state])
+            action = np.argmax(probs)
 
-            print(f"Step {steps}: pos={current_state}, action={actions_names[action]}")
-
-            # Get new state
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             steps += 1
 
             if terminated or truncated:
-                # If the mission was completed then break the episode
+                # Si llega al objetivo o se termina el episodio cortar el ciclo
                 break
 
         if terminated:
             success_count += 1
 
-        print(f"Test Episode {episode} — Success={terminated}, Total Reward={total_reward:.2f}, Steps={steps}")
+        print(f"- Test Episode {episode} — Success={terminated}, Total Reward={total_reward:.2f}, Steps={steps}")
 
+    # Mostrar resultados finales
     print(f"\nSuccess rate during test: {success_count}/{EPISODES}")
