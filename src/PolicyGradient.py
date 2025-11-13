@@ -20,8 +20,7 @@ def select_action(params, state):
     action = np.random.choice(len(probs), p=probs)
     return action, probs
 
-# Calcula las recompensas (reward-to-go) como :
-# G_t = r_t + γ * r_{t+1} + γ^2 * r_{t+2} + ...
+# Calcula las recompensas (reward-to-go) como : G_t = r_t + γ * r_{t+1} + γ^2 * r_{t+2} + ...
 def compute_rtgo(rewards, gamma):
     returns = np.zeros_like(rewards, dtype=np.float32)
     G = 0
@@ -57,7 +56,9 @@ def train(env, policy, EPISODES, STEPS, LR, DISCOUNT_FACTOR):
 
             # Ejecutar acción en el entorno
             obs, reward, terminated, truncated, info = env.step(action)
-            reward -= 0.001  # Penalización leve por paso
+
+            # Penalización leve por paso
+            reward -= 0.001  
             total_reward += reward
 
             # Guardar trayectoria
@@ -70,7 +71,7 @@ def train(env, policy, EPISODES, STEPS, LR, DISCOUNT_FACTOR):
                     success_count += 1
                 break
 
-        # Calcular recompensas (reward-to-go)
+        # Calcular recompensas
         rtgo = compute_rtgo(rewards, DISCOUNT_FACTOR)
 
         # Actualizar parámetros de la política

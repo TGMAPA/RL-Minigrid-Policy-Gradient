@@ -2,7 +2,7 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from PolicyGradient import *   # Asegúrate de que Test_C.py contenga el código REINFORCE
+from PolicyGradient import *  
 from minigrid.wrappers import RGBImgObsWrapper
 
 def main():
